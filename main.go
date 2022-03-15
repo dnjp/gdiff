@@ -1,16 +1,22 @@
 package main
 
 import (
-	"9fans.net/go/draw"
+	"bufio"
+	"bytes"
 	"flag"
+	"fmt"
 	"image"
+	"io"
+	"os"
+	"strconv"
+
+	"9fans.net/go/draw"
 )
 
 type Line struct {
-	t int
-	s string
-	f string
-	l int
+	t LineType
+	s []byte
+	f []byte
 }
 
 type Col struct {
@@ -18,16 +24,34 @@ type Col struct {
 	fg *draw.Image
 }
 
-type ColItem int
+type LineType int
 
 const (
-	Lfile ColItem = iota
+	Lfile LineType = iota
 	Lsep
 	Ladd
 	Ldel
 	Lnone
 	Ncols
 )
+
+func linetype(text []byte) LineType {
+	t := Lnone
+	if bytes.Contains(text, []byte("+++")) {
+		t = Lfile
+	} else if bytes.Contains(text, []byte("---")) {
+		if len(text) > 4 {
+			t = Lfile
+		}
+	} else if bytes.Contains(text, []byte("@@")) {
+		t = Lsep
+	} else if bytes.Contains(text, []byte("+")) {
+		t = Ladd
+	} else if bytes.Contains(text, []byte{'-'}) {
+		t = Ldel
+	}
+	return t
+}
 
 type Sep int
 
@@ -41,13 +65,12 @@ const (
 
 var (
 	display                            *draw.Display
-	black = flag.Bool("b", false, "draw black background")
+	black                              = flag.Bool("b", false, "draw black background")
 	sr, scrollr, scrposr, listr, textr draw.Rectangle
 	cols                               [Ncols]Col
 	scrlcol                            Col
 	scrollsize, lineh, nlines, offset  int
-	lines                              []*Line
-	lsize, lcount, maxlength, Δpan     int
+	lsize, maxlength, Δpan             int
 	ellipsis                           string = "..."
 )
 
@@ -108,10 +131,97 @@ func initcols(black bool) error {
 	return nil
 }
 
+func parseline(f, s []byte) *Line {
+	l := &Line{
+		t: linetype(s),
+		s: s,
+	}
+	if l.t != Lfile && l.t != Lsep {
+		l.f = f
+	} else {
+		l.f = nil
+	}
+	lens := len(s)
+	if lens > maxlength {
+		maxlength = lens
+	}
+	return l
+}
+
+func tokenize(s []byte, n int) [][]byte {
+	return bytes.SplitN(s, []byte{' '}, n)
+}
+
+func lineno(s []byte) int {
+	var p []byte
+	var t [][]byte
+	var n, l int
+
+	p = make([]byte, len(s))
+	copy(p, s)
+	t = tokenize(p, 5)
+	n = len(t)
+	if n <= 0 {
+		return -1
+	}
+	l, _ = strconv.Atoi(string(t[2]))
+	return l
+}
+
+func parse() ([]*Line, error) {
+	var l *Line
+	var s, f []byte
+	var ab bool
+	var n int
+	var err error
+	lines := make([]*Line, 0)
+
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		s, _, err = reader.ReadLine()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return lines, err
+		}
+		l = parseline(f, s)
+		// TODO: check len(s)
+		if l.t == Lfile && l.s[0] == '-' && bytes.Contains(l.s[4:], []byte("a/")) {
+			ab = true
+		}
+		if l.t == Lfile && l.s[0] == '+' {
+			f = l.s[4:]
+			if ab && bytes.Contains(f, []byte("b/")) {
+				f = f[1:]
+				_, err = os.Lstat(string(f))
+				if err != nil {
+					f = f[1:]
+				}
+			}
+		} else if l.t == Lsep {
+			n = lineno(l.s)
+		} else if l.t == Ladd || l.t == Lnone {
+			n++
+		}
+		lines = append(lines, l)
+	}
+	return lines, nil
+}
+
 func main() {
 	flag.Parse()
+
+	lines, err := parse()
+	if err != nil {
+		panic(err)
+	}
+	if len(lines) == 0 {
+		fmt.Fprintf(os.Stderr, "no diff\n")
+		os.Exit(1)
+	}
+
 	errs := make(chan error)
-	var err error
 	display, err = draw.Init(errs, "", "label", "1000x500")
 	if err != nil {
 		panic(err)
