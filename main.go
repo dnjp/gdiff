@@ -65,6 +65,8 @@ const (
 
 var (
 	display                            *draw.Display
+	mousectl *draw.Mousectl
+	keyboardctl *draw.Keyboardctl
 	black                              = flag.Bool("b", false, "draw black background")
 	sr, scrollr, scrposr, listr, textr draw.Rectangle
 	cols                               [Ncols]Col
@@ -73,6 +75,34 @@ var (
 	lsize, maxlength, Δpan             int
 	ellipsis                           string = "..."
 )
+
+func redraw() {
+	// var lr draw.Rectangle
+	// var i, h, y int
+}
+
+func eresized(lines []*Line, new bool) error {
+	if new {
+		err := display.Attach(draw.RefNone)
+		if err != nil {
+			return err
+		}
+	}
+	sr = display.ScreenImage.R
+	scrollr = sr
+	scrollr.Max.X = scrollr.Min.X + int(Scrollwidth) + int(Scrollgap)
+	listr = sr
+	listr.Min.X = scrollr.Max.X
+	textr = listr.Inset(Margin)
+	lineh = Vpadding+display.Font.Height
+	nlines = textr.Dy() / lineh
+	scrollsize = draw.MouseScrollSize(len(lines))
+	if offset > 0 && offset+nlines > len(lines) {
+		offset = len(lines) - nlines+1
+	}
+	redraw()
+	return nil
+}
 
 func initcol(c *Col, fg, bg draw.Color) error {
 	var err error
@@ -230,6 +260,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	mousectl = display.InitMouse()
+	keyboardctl = display.InitKeyboard()
+
 	defer display.Close()
 	panic(<-errs)
 }
